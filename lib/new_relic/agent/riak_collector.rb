@@ -43,19 +43,6 @@ module NewRelic
             ::NewRelic::Agent.logger.debug("Agent is configured to use SSL")
           end
         end
-
-        Agent.config.register_callback(:marshaller) do |marshaller|
-          begin
-            if marshaller == 'json'
-              require 'json'
-              @marshaller = JsonMarshaller.new
-            else
-              @marshaller = PrubyMarshaller.new
-            end
-          rescue LoadError
-            @marshaller = PrubyMarshaller.new
-          end
-        end
       end
 
       def connect(settings={})
@@ -91,13 +78,7 @@ module NewRelic
         now = Time.now
 
         data, size = nil
-        begin
-          data = @marshaller.dump(args)
-        rescue JsonError
-          @marshaller = PrubyMarshaller.new
-          retry
-        end
-
+        
         data, encoding = compress_request_if_needed(data)
         size = data.size
 
@@ -109,7 +90,7 @@ module NewRelic
                                 :uri       => uri,
                                 :encoding  => encoding,
                                 :collector => @collector)
-        @marshaller.load(decompress_response(response))
+        decompress_response(response)
       rescue NewRelic::Agent::ForceRestartException => e
         ::NewRelic::Agent.logger.debug e.message
         raise
