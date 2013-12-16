@@ -780,7 +780,7 @@ module NewRelic
           # Can accommodate most arbitrary data - anything extra is
           # ignored unless we say to do something with it here.
           def finish_setup(config_data)
-            return if config_data == nil
+            return if config_data == nil or @service.instance_of? RiakCollector
 
             @service.agent_id = config_data['agent_run_id'] if @service
 

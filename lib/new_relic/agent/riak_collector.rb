@@ -36,12 +36,27 @@ module NewRelic
         Agent.config.register_callback(:'audit_log.enabled') do |enabled|
           @audit_logger.enabled = enabled
         end
+        Agent.config.register_callback(:marshaller) do |marshaller|
+          begin
+            if marshaller == 'json'
+              require 'json'
+              @marshaller = JsonMarshaller.new
+            else
+              @marshaller = PrubyMarshaller.new
+            end
+          rescue LoadError
+            @marshaller = PrubyMarshaller.new
+          end
+        end
+
       end
 
+      # Create connection to riak host using persistent riak client
       def connect(settings={})
-        @riak_client = Riak::Client.new( :protocol => settings['riak_collector_protocol'],
-                          :host     => settings['riak_collector_host'],
-                          :port     => settings['riak_collector_port'],)
+        config = settings[:settings]
+        @riak_client = Riak::Client.new( :host     => config[:riak_collector_host],
+                                         :pb_port  => config[:riak_collector_port],
+                                         :protocol => 'pbc',)
       end
 
       # The path to the certificate file used to verify the SSL
@@ -54,13 +69,46 @@ module NewRelic
 
       # The path on the server that we should post our data to
       def remote_method_uri(method, format='ruby')
-        params = {'run_id' => @agent_id, 'marshal_format' => format}
-        uri = "/agent_listener/#{PROTOCOL_VERSION}/#{@license_key}/#{method}"
-        uri << '?' + params.map do |k,v|
-          next unless v
-          "#{k}=#{v}"
-        end.compact.join('&')
+        uri = "/#{method}"
         uri
+      end
+
+      def metric_data(stats_hash)
+        ::NewRelic::Agent.logger.debug "metric_data events not yet supported"
+      end
+
+      def error_data(unsent_errors)
+        ::NewRelic::Agent.logger.debug "error_data events not yet supported"
+      end
+
+      def transaction_sample_data(traces)
+        ::NewRelic::Agent.logger.debug "transaction_sample_data events not yet supported"
+      end
+
+      def sql_trace_data(sql_traces)
+        ::NewRelic::Agent.logger.debug "sql_trace_data events not yet supported"
+      end
+
+      def profile_data(profile)
+        ::NewRelic::Agent.logger.debug "profile_data events not yet supported"
+      end
+
+      def get_agent_commands
+        ::NewRelic::Agent.logger.debug "error_data events not yet supported"
+      end
+
+      def agent_command_results(results)
+        ::NewRelic::Agent.logger.debug "agent_command_results not yet supported"
+      end
+
+      def get_xray_metadata(xray_ids)
+        ::NewRelic::Agent.logger.debug "xray_metadata events not yet supported"
+      end
+
+      # Send fine-grained analytic data to the collector.
+      def analytic_event_data(data)
+        #data = data.map { |hash| [hash] }
+        invoke_remote(:analytic_event_data, @agent_id, data)
       end
 
       # send a message via post to the actual server. This attempts
@@ -70,22 +118,19 @@ module NewRelic
       def invoke_remote(method, *args)
         now = Time.now
 
-        data, size = nil
+        data = args
+        size = nil
 
-        puts data
+        ::NewRelic::Agent.logger.debug "#{method}: #{data}"
 
-        data, encoding = compress_request_if_needed(data)
         size = data.size
 
-        uri = remote_method_uri(method, @marshaller.format)
-        full_uri = "#{@collector}#{uri}"
+        uri = "#{method}"
 
-        @audit_logger.log_request(full_uri, args, @marshaller)
+        @audit_logger.log_request(uri, args, @marshaller)
         response = send_request(:data      => data,
                                 :uri       => uri,
-                                :encoding  => encoding,
                                 :collector => @collector)
-        decompress_response(response)
       rescue NewRelic::Agent::ForceRestartException => e
         ::NewRelic::Agent.logger.debug e.message
         raise
@@ -98,46 +143,28 @@ module NewRelic
       # Options:
       #  - :uri => the path to request on the server (a misnomer of
       #              course)
-      #  - :encoding => the encoding to pass to the server
       #  - :collector => a URI object that responds to the 'name' method
       #                    and returns the name of the collector to
       #                    contact
       #  - :data => the data to send as the body of the request
       def send_request(opts)
-        request = Net::HTTP::Post.new(opts[:uri], 'CONTENT-ENCODING' => opts[:encoding], 'HOST' => opts[:collector].name)
-        request['user-agent'] = user_agent
-        request.content_type = "application/octet-stream"
-        request.body = opts[:data]
-
-        response = nil
-        http = http_connection
-        http.read_timeout = nil
-        NewRelic::TimerLib.timeout(@request_timeout) do
-          ::NewRelic::Agent.logger.debug "Sending request to #{opts[:collector]}#{opts[:uri]}"
-          response = http.request(request)
+        ::NewRelic::Agent.logger.info "sending data to #{opts[:uri]} bucket"
+        bucket = @riak_client.bucket(opts[:uri])
+        opts[:data].each do |container|
+          next if container.nil?
+          container.each do |data|
+            begin
+              data = @marshaller.dump(data)
+            rescue JsonError
+              @marshaller = PrubyMarshaller.new
+              retry
+            end
+            ::NewRelic::Agent.logger.debug "serialized data: #{data}"
+            event = bucket.new
+            event.raw_data = data
+            event.store()
+          end
         end
-        case response
-        when Net::HTTPSuccess
-          true # fall through
-        when Net::HTTPUnauthorized
-          raise LicenseException, 'Invalid license key, please contact support@newrelic.com'
-        when Net::HTTPServiceUnavailable
-          raise ServerConnectionException, "Service unavailable (#{response.code}): #{response.message}"
-        when Net::HTTPGatewayTimeOut
-          raise Timeout::Error, response.message
-        when Net::HTTPRequestEntityTooLarge
-          raise UnrecoverableServerException, '413 Request Entity Too Large'
-        when Net::HTTPUnsupportedMediaType
-          raise UnrecoverableServerException, '415 Unsupported Media Type'
-        else
-          raise ServerConnectionException, "Unexpected response from server (#{response.code}): #{response.message}"
-        end
-        response
-      rescue Timeout::Error, EOFError, SystemCallError, SocketError => e
-        # These include Errno connection errors, and all signify that the
-        # connection may be in a bad state, so drop it and re-create if needed.
-        close_shared_connection
-        raise NewRelic::Agent::ServerConnectionException, "Recoverable error connecting to #{@collector}: #{e}"
       end
 
     end
