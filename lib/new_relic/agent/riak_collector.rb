@@ -36,19 +36,12 @@ module NewRelic
         Agent.config.register_callback(:'audit_log.enabled') do |enabled|
           @audit_logger.enabled = enabled
         end
-        Agent.config.register_callback(:ssl) do |ssl|
-          if !ssl
-            ::NewRelic::Agent.logger.warn("Agent is configured not to use SSL when communicating with New Relic's servers")
-          else
-            ::NewRelic::Agent.logger.debug("Agent is configured to use SSL")
-          end
-        end
       end
 
       def connect(settings={})
-        @riak_client = Riak::Client.new( :protocol => settings['protocol'],
-                          :host     => settings['host'],
-                          :port     => settings['port'],)
+        @riak_client = Riak::Client.new( :protocol => settings['riak_collector_protocol'],
+                          :host     => settings['riak_collector_host'],
+                          :port     => settings['riak_collector_port'],)
       end
 
       # The path to the certificate file used to verify the SSL
@@ -78,7 +71,9 @@ module NewRelic
         now = Time.now
 
         data, size = nil
-        
+
+        puts data
+
         data, encoding = compress_request_if_needed(data)
         size = data.size
 

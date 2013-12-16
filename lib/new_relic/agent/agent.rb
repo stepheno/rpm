@@ -11,6 +11,7 @@ require 'stringio'
 require 'new_relic/agent/sampled_buffer'
 require 'new_relic/agent/autostart'
 require 'new_relic/agent/new_relic_service'
+require 'new_relic/agent/riak_collector'
 require 'new_relic/agent/pipe_service'
 require 'new_relic/agent/configuration/manager'
 require 'new_relic/agent/database'
@@ -36,7 +37,7 @@ module NewRelic
         # FIXME: temporary work around for RUBY-839
         # This should be handled with a configuration callback
         if Agent.config[:monitor_mode]
-          @service = NewRelic::Agent::NewRelicService.new
+          @service = NewRelic::Agent::RiakCollector.new
         end
 
         @events                = NewRelic::Agent::EventListener.new
